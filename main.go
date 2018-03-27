@@ -22,7 +22,7 @@ func main() {
 	header, byteOrder := nifti1.ReadHeader(allBytes)
 	fmt.Println(header)
 
-	data := nifti1.ReadData(allBytes, header, byteOrder)
+	image := nifti1.ConvertHeaderToImage(header, byteOrder)
+	image.SetData(allBytes, header)
 
-	fmt.Println(len(data))
 }
