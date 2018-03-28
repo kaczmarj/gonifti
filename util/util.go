@@ -1,79 +1,58 @@
 package util
 
 import (
-	"fmt"
-	"os"
-	"sync"
+	"bytes"
+	"compress/gzip"
+	"io/ioutil"
+	"net/http"
+
+	log "github.com/sirupsen/logrus"
 )
 
-// ReadBytesParallel returns the bytes of a file.
-// Based on
-// https://github.com/kgrz/reading-files-in-go/blob/master/reading-chunkwise-multiple.go
-func ReadBytesParallel(filepath string, bufferSize int) []byte {
-	file, err := os.Open(filepath)
+// ReadBytes returns the contents of a file as an array of bytes. It accepts
+// files compressed with gzip and uncompressed files.
+func ReadBytes(filename string) ([]byte, error) {
+	content, err := ioutil.ReadFile(filename)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
-	defer file.Close()
 
-	fileinfo, err := file.Stat()
+	// This function usees at most 512 bytes.
+	mime := http.DetectContentType(content[:512])
+
+	log.WithFields(log.Fields{
+		"mimeType": mime,
+	}).Debug("Found mime type")
+
+	// TODO(kaczmarj): Decompression seems to be the bottleneck for large files.
+	// Inflate if file is gzipped.
+	if mime == "application/x-gzip" {
+		log.WithFields(log.Fields{
+			"decompression": "gzip",
+		}).Debug("Decompressing ...")
+		// Overwrite array of compressed bytes with array of inflated bytes.
+		content, err = inflateGzip(content)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	return content, nil
+}
+
+// inflateGzip inflates a gzip compressed array of bytes.
+func inflateGzip(b []byte) ([]byte, error) {
+	br := bytes.NewReader(b)
+	g, err := gzip.NewReader(br)
 	if err != nil {
-		panic(err)
+		return nil, err
+	}
+	defer g.Close()
+
+	p, err := ioutil.ReadAll(g)
+	if err != nil {
+		return nil, err
 	}
 
-	type chunk struct {
-		bufsize int
-		offset  int64
-	}
-
-	filesize := int(fileinfo.Size())
-	// Number of go routines we need to spawn.
-	concurrency := filesize / bufferSize
-	// buffer sizes that each of the go routine below should use. ReadAt
-	// returns an error if the buffer size is larger than the bytes returned
-	// from the file.
-	chunksizes := make([]chunk, concurrency)
-
-	// All buffer sizes are the same in the normal case. Offsets depend on the
-	// index. Second go routine should start at 100, for example, given our
-	// buffer size of 100.
-	for i := 0; i < concurrency; i++ {
-		chunksizes[i].bufsize = bufferSize
-		chunksizes[i].offset = int64(bufferSize * i)
-	}
-
-	// check for any left over bytes. Add the residual number of bytes as the
-	// the last chunk size.
-	if remainder := filesize % bufferSize; remainder != 0 {
-		c := chunk{bufsize: remainder, offset: int64(concurrency * bufferSize)}
-		concurrency++
-		chunksizes = append(chunksizes, c)
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-
-	// Allocate array of bytes to hold all of the bytes in the file. The function
-	// returns this array.
-	allBytes := make([]byte, filesize)
-
-	for i := 0; i < concurrency; i++ {
-		go func(chunksizes []chunk, i int) {
-			defer wg.Done()
-
-			chunk := chunksizes[i]
-			start := chunk.offset
-			end := int(start) + chunk.bufsize
-			bytesRead, err := file.ReadAt(allBytes[start:end], chunk.offset)
-			if bytesRead < 1 {
-				panic("Did not read any bytes")
-			}
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
-		}(chunksizes, i)
-	}
-	wg.Wait()
-	return allBytes
+	return p, nil
 }
