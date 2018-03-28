@@ -16,11 +16,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 )
-
-// Create logger
-var log = logrus.New()
 
 // Header defines the structure of the Nifti1 header.
 //
@@ -205,7 +202,7 @@ func check(e error) {
 // https://github.com/afni/afni/blob/master/src/nifti/niftilib/nifti1_io.c#L3948-L4042
 func ReadHeader(b []byte) (Header, binary.ByteOrder) {
 
-	log.Debug("Reading header")
+	log.Debug("Reading header ...")
 	h := Header{}
 	var order binary.ByteOrder = binary.LittleEndian
 
@@ -226,31 +223,49 @@ func ReadHeader(b []byte) (Header, binary.ByteOrder) {
 
 	validateHeader(h)
 
-	log.Debug("Byte order is", order)
+	log.WithFields(log.Fields{
+		"byteOrder": order,
+	}).Debug("Found byte order")
+
 	return h, order
 }
 
 // Check https://github.com/afni/afni/blob/master/src/nifti/niftilib/nifti1_io.c#L4045-L4104
 func validateHeader(h Header) {
-	log.Debug("Validating header")
 	switch {
+
 	case h.SizeOfHdr != minHeaderSize:
-		panic("invalid header size for nifti-1")
+		log.WithFields(log.Fields{
+			"cause":       "invalid header size",
+			"headerSize":  h.SizeOfHdr,
+			"headerValid": false,
+		}).Fatal("Invalid header size for nifti1")
+
 	// Assert that file magic is 'n+1', meaning that the header and data are in
 	// the same file.
 	case h.Magic != [4]int8{110, 43, 49, 0}:
-		panic("invalid file magic. data must be stored in same file as header")
+		log.WithFields(log.Fields{
+			"cause":       "invalid file magic",
+			"headerValid": false,
+		}).Fatal("Invalid file magic. Data must be stored in same file as header")
+
 	case h.DataType == C.DT_BINARY || h.DataType == C.DT_UNKNOWN:
-		panic("bad datatype")
+		log.WithFields(log.Fields{
+			"cause":       "bad datatype",
+			"headerValid": false,
+			"dataType":    h.DataType,
+		}).Fatal("Data type is invalid")
 	}
+
+	log.WithFields(log.Fields{
+		"headerValid": true,
+	}).Debug("Header is valid")
 }
 
 // ConvertHeaderToImage converts a header to an image.
 // Refer to this on how to create an Image struct.
 // https://github.com/afni/afni/blob/master/src/nifti/niftilib/nifti1_io.c#L5377-L5420
 func ConvertHeaderToImage(h Header, order binary.ByteOrder) *Image {
-
-	log.Debug("Converting header to image")
 
 	img := new(Image)
 
@@ -271,7 +286,7 @@ func ConvertHeaderToImage(h Header, order binary.ByteOrder) *Image {
 	return img
 }
 
-// setData sets data into the Image struct. Operates in-place.
+// SetData sets data into the Image struct. Operates in-place.
 // TODO(kaczmarj): refer to this link for implementation details.
 // https://github.com/afni/afni/blob/master/src/nifti/niftilib/nifti1_io.c#L3712-L3899
 // Total number of bytes in the image is dim[dim[0]] * bitpix / 8
@@ -298,8 +313,6 @@ func (img *Image) SetData(b []byte, h Header) {
 	}
 
 	dataSize := img.Dim[1] * img.Dim[2] * img.Dim[3] * timeDim * statDim * (int(h.BitPix) / 8)
-
-	log.Debug("")
 
 	img.Data = b[offset : offset+dataSize]
 
